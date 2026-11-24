@@ -1,0 +1,338 @@
+﻿
+
+================ app/cv/pipeline.py ================
+import math
+
+import numpy as np
+
+from app.config import settings
+from app.models.base import BuildingInstance
+from app.models.registry import Models
+from app.spatial.tools import DAMAGE_CLASSES
+
+
+def quadrant_of(cx: float, cy: float, w: int, h: int) -> str:
+    return ("N" if cy < h / 2 else "S") + ("W" if cx < w / 2 else "E")
+
+
+class Pipeline:
+    """Run the configured model stack and produce frontend-ready building rows."""
+
+    def __init__(self, models: Models):
+        self.models = models
+
+    @property
+    def mode(self) -> str:
+        return self.models.mode
+
+    def run(self, before: np.ndarray, after: np.ndarray) -> list[dict]:
+        if before is None or after is None or before.ndim != 3 or after.ndim != 3:
+            raise ValueError("before and after must be decoded HxWx3 images")
+        if before.shape != after.shape:
+            raise ValueError("before and after images must have identical dimensions after alignment")
+        h, w = after.shape[:2]
+        if hasattr(self.models.change, "predict_instances"):
+            # The supplied ChangeFormer is a detector/classifier. Use its boxes
+            # and labels, then refine each box with the U-Net semantic mask.
+            detections = self.models.change.predict_instances(before, after)
+            semantic_regions = self.models.seg.predict(after)
+            instances = self._refine_detections(detections, semantic_regions, h, w)
+            if not instances:
+                # The detector can reject every proposal on a difficult image.
+                # Preserve the U-Net's own damage-map regions instead of returning
+                # an empty result solely because the detector had no boxes.
+                instances = semantic_regions
+            change = cv2_change_mask(before, after)
+        else:
+            change = np.asarray(self.models.change.predict(before, after), dtype=bool)
+            if change.shape != (h, w):
+                raise ValueError(f"change detector returned {change.shape}; expected {(h, w)}")
+            instances = self.models.seg.predict(after)
+
+        rows: list[dict] = []
+        for inst in instances:
+            mask = np.asarray(inst.mask, dtype=bool)
+            if mask.shape != (h, w):
+                raise ValueError(f"segmenter returned mask {mask.shape}; expected {(h, w)}")
+            area = int(mask.sum())
+            if area < settings.min_building_area:
+                continue
+            x1, y1, x2, y2 = (int(v) for v in inst.bbox)
+            x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            local_mask = mask[y1:y2, x1:x2]
+            if not local_mask.any():
+                continue
+            ratio = float(change[mask].mean())
+
+            before_crop = before[y1:y2, x1:x2].copy()
+            after_crop = after[y1:y2, x1:x2].copy()
+            # Fill non-building pixels with the building's median colour rather than
+            # artificial black, which can become a spurious classifier feature.
+            for crop in (before_crop, after_crop):
+                pixels = crop[local_mask]
+                fill = np.median(pixels, axis=0).astype(crop.dtype) if len(pixels) else np.zeros(3, dtype=crop.dtype)
+                crop[~local_mask] = fill
+
+            # The trained U-Net predicts a damage class map directly. Its adapter
+            # attaches the winning class and confidence to each component; other
+            # segmenters continue through the paired-crop classifier.
+            if getattr(inst, "damage", None) in DAMAGE_CLASSES[:-1]:
+                label = inst.damage
+                confidence = inst.confidence
+            else:
+                label, confidence = self.models.cls.predict(before_crop, after_crop)
+            confidence = float(confidence)
+            if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+                label, confidence = "Unclassified", 0.0
+            if label not in DAMAGE_CLASSES[:-1]:
+                label = "Unclassified"
+            if confidence < settings.min_conf:
+                label = "Unclassified"
+
+            polygons = getattr(inst, "polygons", None) or [inst.polygon]
+            polygons = [p for p in polygons if isinstance(p, list) and len(p) >= 3]
+            if not polygons:
+                continue
+            primary = inst.polygon if inst.polygon in polygons else polygons[0]
+            rows.append({
+                "bbox": [x1, y1, x2, y2],
+                "polygon": primary,
+                "polygons": polygons,
+                "damage": label,
+                "conf": round(confidence, 4),
+                "changed_ratio": round(ratio, 4),
+                "area": area,
+                "quadrant": quadrant_of((x1 + x2) / 2, (y1 + y2) / 2, w, h),
+                # Internal-only raster mask for accurate GeoTIFF polygonization.
+                "_mask": mask,
+            })
+
+        rows.sort(key=lambda row: (row["bbox"][1] // 40, row["bbox"][0]))
+        for index, row in enumerate(rows, 1):
+            row["id"] = f"B{index:03d}"
+        return rows
+
+    @staticmethod
+    def _refine_detections(detections, regions, height: int, width: int):
+        """Use U-Net masks and damage scores for matched detector proposals."""
+        used: set[int] = set()
+        refined = []
+        for detection in detections:
+            best_index, best_iou = None, 0.0
+            for index, region in enumerate(regions):
+                if index in used:
+                    continue
+                det_mask = np.asarray(detection.mask, dtype=bool)
+                reg_mask = np.asarray(region.mask, dtype=bool)
+                if det_mask.shape != (height, width) or reg_mask.shape != (height, width):
+                    continue
+                intersection = int(np.logical_and(det_mask, reg_mask).sum())
+                union = int(np.logical_or(det_mask, reg_mask).sum())
+                iou = intersection / max(union, 1)
+                if iou > best_iou:
+                    best_index, best_iou = index, iou
+            if best_index is not None and best_iou >= 0.05:
+                region = regions[best_index]
+                used.add(best_index)
+                # ChangeFormer supplies candidate building boxes. The U-Net
+                # semantic component supplies the damage class and confidence;
+                # keeping the detector's class here silently discarded the
+                # U-Net's damage prediction for every matched building.
+                refined.append(BuildingInstance(
+                    np.asarray(region.mask, dtype=bool), region.bbox,
+                    region.polygon, region.polygons,
+                    getattr(region, "damage", None), getattr(region, "confidence", 0.0),
+                ))
+            else:
+                refined.append(detection)
+        return refined
+
+
+def cv2_change_mask(before: np.ndarray, after: np.ndarray) -> np.ndarray:
+    """Approximate changed-pixel ratio for display when ChangeFormer returns boxes."""
+    import cv2
+
+    diff = cv2.absdiff(before, after).astype(np.float32).mean(axis=2)
+    return diff > 20.0
+
+
+================ app/models/unet_damage.py ================
+"""Adapter for the trained five-class U-Net damage-map checkpoint."""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+import torch
+from torch import nn
+
+from app.config import settings
+from .base import BuildingInstance
+
+
+class _ConvBlock(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels), nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels), nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class _EncoderBlock(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.conv = _ConvBlock(in_channels, out_channels)
+        self.pool = nn.MaxPool2d(2, 2)
+
+    def forward(self, x):
+        features = self.conv(x)
+        return features, self.pool(features)
+
+
+class _DecoderBlock(nn.Module):
+    def __init__(self, in_channels: int, skip_channels: int, out_channels: int):
+        super().__init__()
+        self.up = nn.ConvTranspose2d(in_channels, out_channels, 2, 2)
+        self.conv = _ConvBlock(out_channels + skip_channels, out_channels)
+
+    def forward(self, x, skip):
+        x = self.up(x)
+        if x.shape[2:] != skip.shape[2:]:
+            x = nn.functional.interpolate(x, size=skip.shape[2:], mode="bilinear", align_corners=False)
+        return self.conv(torch.cat([x, skip], dim=1))
+
+
+class _UNet(nn.Module):
+    def __init__(self, in_channels: int = 3, num_classes: int = 5):
+        super().__init__()
+        self.encoder1 = _EncoderBlock(in_channels, 64)
+        self.encoder2 = _EncoderBlock(64, 128)
+        self.encoder3 = _EncoderBlock(128, 256)
+        self.encoder4 = _EncoderBlock(256, 512)
+        self.bottleneck = _ConvBlock(512, 1024)
+        self.decoder4 = _DecoderBlock(1024, 512, 512)
+        self.decoder3 = _DecoderBlock(512, 256, 256)
+        self.decoder2 = _DecoderBlock(256, 128, 128)
+        self.decoder1 = _DecoderBlock(128, 64, 64)
+        self.segmentation_head = nn.Conv2d(64, num_classes, 1)
+
+    def forward(self, x):
+        e1, p1 = self.encoder1(x)
+        e2, p2 = self.encoder2(p1)
+        e3, p3 = self.encoder3(p2)
+        e4, p4 = self.encoder4(p3)
+        b = self.bottleneck(p4)
+        d4 = self.decoder4(b, e4)
+        d3 = self.decoder3(d4, e3)
+        d2 = self.decoder2(d3, e2)
+        d1 = self.decoder1(d2, e1)
+        return self.segmentation_head(d1)
+
+
+class UNetDamageSegmenter:
+    """Return connected components from the U-Net's semantic damage map.
+
+    This adapter cannot separate touching same-class buildings; the model predicts
+    semantic classes, not building instances.
+    """
+
+    DAMAGE = {1: "No Damage", 2: "Minor", 3: "Major", 4: "Destroyed"}
+
+    def __init__(self):
+        path = settings.unet_weights
+        if settings.device.startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError("DEVICE requests CUDA, but torch.cuda.is_available() is False")
+        self.device = torch.device(settings.device)
+        self.size = int(settings.unet_input_size)
+        try:
+            checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        except TypeError:
+            checkpoint = torch.load(path, map_location=self.device)
+        state = checkpoint.get("model_state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        self.model = _UNet(in_channels=3, num_classes=5).to(self.device)
+        self.model.load_state_dict(state)
+        self.model.eval()
+
+    @torch.inference_mode()
+    def predict(self, after: np.ndarray) -> list[BuildingInstance]:
+        h, w = after.shape[:2]
+        rgb = cv2.cvtColor(cv2.resize(after, (self.size, self.size)), cv2.COLOR_BGR2RGB)
+        tensor = torch.from_numpy(rgb.copy()).permute(2, 0, 1).float().div_(255).unsqueeze(0).to(self.device)
+        probs = self.model(tensor).softmax(dim=1)[0]
+        class_map = probs.argmax(dim=0).cpu().numpy().astype(np.uint8)
+        conf_map = probs.cpu().numpy()
+        class_map = cv2.resize(class_map, (w, h), interpolation=cv2.INTER_NEAREST)
+        conf_map = np.stack([cv2.resize(c, (w, h), interpolation=cv2.INTER_LINEAR) for c in conf_map])
+
+        instances: list[BuildingInstance] = []
+        for class_id, damage in self.DAMAGE.items():
+            count, labels, stats, _ = cv2.connectedComponentsWithStats((class_map == class_id).astype(np.uint8), 8)
+            for component in range(1, count):
+                x, y, bw, bh, area = (int(v) for v in stats[component])
+                if area < settings.min_building_area:
+                    continue
+                mask = labels == component
+                contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                polygons = []
+                for contour in contours:
+                    if cv2.contourArea(contour) < 3:
+                        continue
+                    contour = cv2.approxPolyDP(contour, 0.01 * cv2.arcLength(contour, True), True)
+                    points = contour.reshape(-1, 2).astype(int).tolist()
+                    if len(points) >= 3:
+                        polygons.append(points)
+                if not polygons:
+                    continue
+                confidence = float(conf_map[class_id][mask].mean())
+                instance = BuildingInstance(mask, (x, y, x + bw, y + bh), polygons[0], polygons)
+                instance.damage = damage
+                instance.confidence = confidence
+                instances.append(instance)
+        return instances
+
+
+
+================ app/models/base.py ================
+"""Model contracts. Anything that implements these can be dropped into the pipeline."""
+from dataclasses import dataclass, field
+from typing import Protocol
+
+import numpy as np
+
+CLASSES = ["No Damage", "Minor", "Major", "Destroyed", "Unclassified"]
+
+
+@dataclass
+class BuildingInstance:
+    mask: np.ndarray  # HxW bool
+    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2
+    polygon: list[list[int]]
+    polygons: list[list[list[int]]] = field(default_factory=list)
+    # Semantic-damage models can supply a class directly with each component.
+    damage: str | None = None
+    confidence: float = 0.0
+
+
+class ChangeDetector(Protocol):
+    def predict(self, before: np.ndarray, after: np.ndarray) -> np.ndarray:
+        """BGR uint8 images (HxWx3) -> HxW bool change mask."""
+        ...
+
+
+class BuildingSegmenter(Protocol):
+    def predict(self, after: np.ndarray) -> list[BuildingInstance]:
+        """BGR uint8 post-disaster image -> one instance per building."""
+        ...
+
+
+class DamageClassifier(Protocol):
+    def predict(self, before_crop: np.ndarray, after_crop: np.ndarray) -> tuple[str, float]:
+        """BGR crops of one building -> (damage class, confidence)."""
+        ...

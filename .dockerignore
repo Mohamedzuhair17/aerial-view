@@ -1,0 +1,14 @@
+.env
+.git/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+data/
+dataset v1/
+dataset v1.7z
+.venv/
+.mcp.json
+*.zip
+frontend/node_modules/
+frontend/dist/
+frontend/.env

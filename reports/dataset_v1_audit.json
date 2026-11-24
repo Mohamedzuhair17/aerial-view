@@ -1,0 +1,184 @@
+{
+  "dataset_root": "dataset v1",
+  "splits": [
+    {
+      "split": "train",
+      "images": {
+        "pre": 308,
+        "post": 308,
+        "paired_scenes": 308,
+        "missing_pre_count": 0,
+        "missing_pre_examples": [],
+        "missing_post_count": 0,
+        "missing_post_examples": []
+      },
+      "labels": {
+        "files": 308,
+        "without_image_pair_count": 0,
+        "without_image_pair_examples": [],
+        "without_label_count": 0,
+        "without_label_examples": [],
+        "malformed": []
+      },
+      "buildings": 29599,
+      "damage_counts": {
+        "Destroyed": 1522,
+        "Major": 1176,
+        "Minor": 759,
+        "No Damage": 25733,
+        "Unclassified": 409
+      },
+      "raw_subtype_counts": {
+        "destroyed": 1522,
+        "major-damage": 1176,
+        "minor-damage": 759,
+        "no-damage": 25733,
+        "un-classified": 409
+      },
+      "disaster_scene_counts": {
+        "guatemala-volcano": 16,
+        "hurricane-harvey": 41,
+        "hurricane-matthew": 42,
+        "hurricane-michael": 39,
+        "mexico-earthquake": 39,
+        "midwest-flooding": 42,
+        "palu-tsunami": 45,
+        "socal-fire": 44
+      },
+      "polygon_bounds": {
+        "min_x": 0.0,
+        "min_y": 0.0,
+        "max_x": 1024.0,
+        "max_y": 1024.0
+      }
+    },
+    {
+      "split": "train_aug",
+      "images": {
+        "pre": 756,
+        "post": 756,
+        "paired_scenes": 756,
+        "missing_pre_count": 0,
+        "missing_pre_examples": [],
+        "missing_post_count": 0,
+        "missing_post_examples": []
+      },
+      "labels": {
+        "files": 756,
+        "without_image_pair_count": 0,
+        "without_image_pair_examples": [],
+        "without_label_count": 0,
+        "without_label_examples": [],
+        "malformed": []
+      },
+      "buildings": 70583,
+      "damage_counts": {
+        "Destroyed": 3918,
+        "Major": 3588,
+        "Minor": 3003,
+        "No Damage": 58661,
+        "Unclassified": 1413
+      },
+      "raw_subtype_counts": {
+        "destroyed": 3918,
+        "major-damage": 3588,
+        "minor-damage": 3003,
+        "no-damage": 58661,
+        "un-classified": 1413
+      },
+      "disaster_scene_counts": {
+        "guatemala-volcano": 44,
+        "hurricane-harvey": 101,
+        "hurricane-matthew": 126,
+        "hurricane-michael": 111,
+        "mexico-earthquake": 103,
+        "midwest-flooding": 98,
+        "palu-tsunami": 89,
+        "socal-fire": 84
+      },
+      "polygon_bounds": {
+        "min_x": 0.0,
+        "min_y": 0.0,
+        "max_x": 1024.0,
+        "max_y": 1024.0
+      }
+    },
+    {
+      "split": "validation",
+      "images": {
+        "pre": 66,
+        "post": 66,
+        "paired_scenes": 66,
+        "missing_pre_count": 0,
+        "missing_pre_examples": [],
+        "missing_post_count": 0,
+        "missing_post_examples": []
+      },
+      "labels": {
+        "files": 66,
+        "without_image_pair_count": 0,
+        "without_image_pair_examples": [],
+        "without_label_count": 0,
+        "without_label_examples": [],
+        "malformed": []
+      },
+      "buildings": 4830,
+      "damage_counts": {
+        "Destroyed": 129,
+        "Major": 119,
+        "Minor": 208,
+        "No Damage": 4328,
+        "Unclassified": 46
+      },
+      "raw_subtype_counts": {
+        "destroyed": 129,
+        "major-damage": 119,
+        "minor-damage": 208,
+        "no-damage": 4328,
+        "un-classified": 46
+      },
+      "disaster_scene_counts": {
+        "guatemala-volcano": 5,
+        "hurricane-harvey": 9,
+        "hurricane-matthew": 9,
+        "hurricane-michael": 14,
+        "mexico-earthquake": 11,
+        "midwest-flooding": 9,
+        "palu-tsunami": 3,
+        "socal-fire": 6
+      },
+      "polygon_bounds": {
+        "min_x": 0.0,
+        "min_y": 0.0,
+        "max_x": 1024.0,
+        "max_y": 1024.0
+      }
+    }
+  ],
+  "augmentation_overlap": {
+    "paired_scene_name_overlap": 308,
+    "same_stem_examples": [
+      "p11b4ad02",
+      "p3152098e",
+      "p32ebaa48",
+      "p39237af1",
+      "p4ca216d8",
+      "p535bc613",
+      "p57d3d177",
+      "p5a7f6953",
+      "p73a4b076",
+      "p754e74d2",
+      "p79d2e3ed",
+      "p7b4f6f93",
+      "p81d3da6b",
+      "p8b3fc048",
+      "p8fb7bc64",
+      "paf5c854c",
+      "pb67aa0fe",
+      "pb83bb922",
+      "pc771c488",
+      "pd694b0c5"
+    ],
+    "note": "Matching names only detects unrenamed copies; visually transformed copies need perceptual-hash review."
+  }
+}

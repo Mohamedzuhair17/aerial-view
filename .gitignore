@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.mcp.json
+frontend/tsconfig.tsbuildinfo
+env
+data/*
+!data/.gitkeep
+dataset v1/
+dataset v1.7z
+weights/*
+!weights/.gitkeep
+.env
+.env.*
+!.env.example
+*.pth
+*.pdparams
+*.pt
+runs/
+unet_debug_*.png
+unet_full_diagnostics.txt
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+frontend/.env
