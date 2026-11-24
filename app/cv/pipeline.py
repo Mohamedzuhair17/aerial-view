@@ -155,36 +155,6 @@ class Pipeline:
             ratio = float(change[mask].mean())
 
             # --------------------------------------------------
-            # 6. Extract before and after building crops
-            # --------------------------------------------------
-
-            before_crop = before[
-                y1:y2, x1:x2
-            ].copy()
-
-            after_crop = after[
-                y1:y2, x1:x2
-            ].copy()
-
-            # Fill non-building pixels with median building colour.
-            for crop in (before_crop, after_crop):
-
-                pixels = crop[local_mask]
-
-                if len(pixels):
-                    fill = np.median(
-                        pixels,
-                        axis=0
-                    ).astype(crop.dtype)
-                else:
-                    fill = np.zeros(
-                        3,
-                        dtype=crop.dtype
-                    )
-
-                crop[~local_mask] = fill
-
-            # --------------------------------------------------
             # 7. Determine damage class
             # --------------------------------------------------
 
@@ -196,12 +166,7 @@ class Pipeline:
                 confidence = inst.confidence
 
             else:
-
-                # Otherwise use the paired-image classifier.
-                label, confidence = self.models.cls.predict(
-                    before_crop,
-                    after_crop
-                )
+                label, confidence = "Unclassified", 0.0
 
             # --------------------------------------------------
             # 8. Validate prediction confidence
@@ -322,9 +287,8 @@ class Pipeline:
         U-Net:
             Supplies damage class and confidence.
 
-        Important:
-            ChangeFormer masks, bounding boxes and polygons
-            are preserved.
+        Matched results use the U-Net mask and polygons so the
+        frontend overlay displays the segmentation itself.
         """
 
         refined = []
@@ -489,22 +453,16 @@ class Pipeline:
                 continue
 
             # --------------------------------------------------
-            # 6. Preserve ChangeFormer geometry
+            # 6. Carry the U-Net geometry into the frontend overlay.
             # --------------------------------------------------
 
             refined.append(
                 BuildingInstance(
 
-                    mask=np.asarray(
-                        detection.mask,
-                        dtype=bool
-                    ),
-
-                    bbox=detection.bbox,
-
-                    polygon=detection.polygon,
-
-                    polygons=detection.polygons,
+                    mask=np.asarray(best_region.mask, dtype=bool),
+                    bbox=best_region.bbox,
+                    polygon=best_region.polygon,
+                    polygons=best_region.polygons,
 
                     # Only damage information comes from U-Net.
                     damage=damage,
